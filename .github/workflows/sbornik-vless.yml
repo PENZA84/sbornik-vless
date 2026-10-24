@@ -2,7 +2,7 @@ name: sbornik-vless
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # каждый день в 6:00 по Москве
+    - cron: "0 3 * * *"   # 03:00 UTC = 06:00 МСК
   workflow_dispatch:
 
 jobs:
@@ -25,9 +25,8 @@ jobs:
       - name: Build subscriptions file
         run: python build_subscriptions.py
 
-      - name: Post subscriptions to Telegram
+      - name: Post subscriptions to Telegram (private only)
         env:
-          TELEGRAM_BOT_TOKEN_PUBLIC: ${{ secrets.TELEGRAM_BOT_TOKEN_PUBLIC }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_PRIVATE_CHANNEL: ${{ secrets.TELEGRAM_PRIVATE_CHANNEL }}
         run: python subscriptions_poster.py
