@@ -25,12 +25,6 @@ jobs:
       - name: Build subscriptions file
         run: python build_subscriptions.py
 
-      - name: Post subscriptions to Telegram (private only)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_PRIVATE_CHANNEL: ${{ secrets.TELEGRAM_PRIVATE_CHANNEL }}
-        run: python subscriptions_poster.py
-
       - name: Commit subscriptions and chunks
         if: success()
         run: |
@@ -43,3 +37,4 @@ jobs:
             git commit -m "Update subscriptions and chunks"
             git push
           fi
+          
