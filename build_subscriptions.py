@@ -1,214 +1,71 @@
 #!/usr/bin/env python3
+"""build_subscriptions.py — собирает subscriptions и subs/*.txt из configs/final/*.txt.
+Telegram не используется.
+"""
 import os
-import sys
-import time
-import requests
-from datetime import datetime
+from typing import List
 
-# Флаги / окружение
-DRY_RUN = os.environ.get("TELEGRAM_DRY_RUN", "0") == "1"
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+FINAL_DIR = os.path.join(BASE_PATH, "configs", "final")
+SUBS_DIR = os.path.join(BASE_PATH, "subs")
+SUBSCRIPTIONS_PATH = os.path.join(BASE_PATH, "subscriptions")
 
-BOT_TOKEN_PRIVATE = os.environ.get("TELEGRAM_BOT_TOKEN")
-PRIVATE_CHANNEL = os.environ.get("TELEGRAM_PRIVATE_CHANNEL")
+REPO_RAW = "https://raw.githubusercontent.com/kort0881/sbornik-vless/refs/heads/main"
 
-# Файл subscriptions в репо sbornik-vless
-SUBSCRIPTIONS_URL = (
-    "https://raw.githubusercontent.com/"
-    "kort0881/sbornik-vless/refs/heads/main/subscriptions"
-)
+PROTOCOLS = ["vless", "vmess", "trojan", "ss", "hysteria", "hysteria2", "hy2", "tuic"]
+CHUNK_SIZE = 1000
 
 
-def load_subscriptions_raw():
-    print(f"🌐 SUBSCRIPTIONS_URL = {SUBSCRIPTIONS_URL}")
-    try:
-        resp = requests.get(SUBSCRIPTIONS_URL, timeout=15)
-        print(f"🔎 HTTP статус: {resp.status_code}")
-        if resp.status_code != 200:
-            print(f"⚠️ Не удалось получить subscriptions: HTTP {resp.status_code}")
-            return ""
-        text = resp.text
-        print(f"🔎 len(resp.text) = {len(text)}")
-        stripped = text.strip()
-        print(f"🔎 len(stripped) = {len(stripped)}")
-        if not stripped:
-            print("⚠️ Файл subscriptions получен, но он пустой (после strip())")
-        return stripped
-    except Exception as e:
-        print(f"❌ Ошибка загрузки subscriptions: {e}")
-        return ""
+def read_final(proto: str) -> List[str]:
+    path = os.path.join(FINAL_DIR, f"{proto}.txt")
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        return [ln.strip() for ln in f if ln.strip()]
 
 
-def parse_subscriptions_blocks(subscriptions_text: str):
-    blocks = {}
-    current = None
-
-    for line in subscriptions_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-
-        if line.startswith("===") and line.endswith("==="):
-            name = line.strip("=").strip()
-            proto = name.split()[0].upper()
-            blocks.setdefault(proto, [])
-            current = proto
-            continue
-
-        if current is None:
-            continue
-
-        if line.startswith("http"):
-            blocks[current].append(line)
-
-    return blocks
-
-
-def build_keyboard(blocks, max_buttons=50):
-    buttons = []
-    flat = []
-
-    order = ["VLESS", "VMESS", "TROJAN", "SS", "HYSTERIA", "HYSTERIA2", "HY2", "TUIC"]
-    for proto in order:
-        urls = blocks.get(proto, [])
-        for idx, url in enumerate(urls, start=1):
-            flat.append((proto, idx, url))
-
-    for proto, idx, url in flat[:max_buttons]:
-        text = f"📥 {proto} {idx:03d}"
-        buttons.append({"text": text, "copy_text": {"text": url}})
-
-    keyboard = []
-    row = []
-    for btn in buttons:
-        row.append(btn)
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-
-    return keyboard
-
-
-def build_private_text(blocks):
-    order = ["VLESS", "VMESS", "TROJAN", "SS", "HYSTERIA", "HYSTERIA2", "HY2", "TUIC"]
-
-    header = (
-        "🔐 <b>Подписочные ссылки sbornik-vless</b>\n\n"
-        f"📅 <code>{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</code>\n\n"
-    )
-    lines = [header]
-
-    for proto in order:
-        urls = blocks.get(proto, [])
-        if not urls:
-            continue
-        lines.append(f"🔹 <b>{proto}</b> — {len(urls)} подписок")
-
-    if len(lines) == 1:
-        lines.append("Нет подписок.")
-
-    lines.append("\nНиже — все подписки кнопками 👇")
-
-    return "\n".join(lines)
-
-
-def send_message_json(bot_token, chat_id, payload, max_retries: int = 3) -> bool:
-    """Отправка сообщения в Telegram с ретраями и экспоненциальным backoff."""
-    if DRY_RUN:
-        print(f"\n[DRY_RUN] sendMessage -> {chat_id}")
-        print(payload)
-        return True
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = requests.post(url, json=payload, timeout=30)
-            try:
-                j = resp.json()
-            except Exception:
-                print(f"❌ Telegram response decode error (попытка {attempt}/{max_retries}): {resp.text[:300]}")
-                j = None
-
-            if resp.status_code != 200 or not j or not j.get("ok"):
-                desc = j.get("description") if isinstance(j, dict) else resp.text[:200]
-                print(
-                    f"❌ Telegram error (попытка {attempt}/{max_retries}): "
-                    f"HTTP {resp.status_code}, {desc}"
-                )
-            else:
-                return True
-
-        except (requests.ConnectionError, requests.Timeout) as e:
-            print(
-                f"🌐 Ошибка сети/таймаута при отправке в Telegram "
-                f"(попытка {attempt}/{max_retries}): {type(e).__name__}: {e}"
-            )
-        except Exception as e:
-            print(f"⚠️ Неожиданная ошибка при отправке в Telegram (попытка {attempt}/{max_retries}): {e}")
-            break
-
-        if attempt < max_retries:
-            delay = 2 * attempt
-            print(f"⏳ Повторная попытка через {delay}с...")
-            time.sleep(delay)
-
-    return False
+def write_chunks(proto: str, items: List[str]) -> List[str]:
+    """Пишет subs/{proto}_{NNN}.txt, возвращает raw-URL на чанки."""
+    if not items:
+        return []
+    os.makedirs(SUBS_DIR, exist_ok=True)
+    urls = []
+    for i in range(0, len(items), CHUNK_SIZE):
+        part = items[i:i + CHUNK_SIZE]
+        part_num = i // CHUNK_SIZE + 1
+        fname = f"{proto}_{part_num:03d}.txt"
+        with open(os.path.join(SUBS_DIR, fname), "w", encoding="utf-8") as f:
+            f.write("\n".join(part))
+        urls.append(f"{REPO_RAW}/subs/{fname}")
+    return urls
 
 
 def main():
-    if not BOT_TOKEN_PRIVATE:
-        print("❌ TELEGRAM_BOT_TOKEN не установлен")
-        return 1
-    if not PRIVATE_CHANNEL:
-        print("❌ TELEGRAM_PRIVATE_CHANNEL не установлен")
-        return 1
+    os.makedirs(SUBS_DIR, exist_ok=True)
 
-    print("\n" + "=" * 70)
-    print(" " * 20 + "🔒 sbornik-vless PRIVATE SUBSCRIPTIONS POSTER")
-    print("=" * 70 + "\n")
+    lines = [
+        "# Автоматически сгенерированный файл подписок",
+        "# Формат: блок === PROTO ===, ниже — raw-URL на чанки",
+        "",
+    ]
+    total = 0
+    for proto in PROTOCOLS:
+        items = read_final(proto)
+        if not items:
+            continue
+        urls = write_chunks(proto, items)
+        lines.append(f"=== {proto.upper()} ===")
+        lines.extend(urls)
+        lines.append("")
+        total += len(items)
+        print(f"{proto:12s}: {len(items):6d} конфигов -> {len(urls)} чанк(ов)")
 
-    subs_raw = load_subscriptions_raw()
-    if not subs_raw:
-        print("⚠️ subscriptions пустой или не удалось загрузить — продолжаем без ссылок")
-        blocks = {}
-        total_urls = 0
-    else:
-        blocks = parse_subscriptions_blocks(subs_raw)
-        total_urls = sum(len(v) for v in blocks.values())
+    with open(SUBSCRIPTIONS_PATH, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
-    print(f"📦 Всего ссылок в subscriptions: {total_urls}\n")
-
-    keyboard = build_keyboard(blocks, max_buttons=50)
-
-    # ---------- ПРИВАТНЫЙ КАНАЛ ----------
-    print("🔒 Приватный канал:", PRIVATE_CHANNEL)
-
-    private_text = build_private_text(blocks)
-
-    payload_private = {
-        "chat_id": PRIVATE_CHANNEL,
-        "text": private_text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-
-    if keyboard:
-        payload_private["reply_markup"] = {"inline_keyboard": keyboard}
-
-    ok_priv = send_message_json(BOT_TOKEN_PRIVATE, PRIVATE_CHANNEL, payload_private)
-    if ok_priv:
-        print("✅ Приватный пост отправлен")
-    else:
-        print("❌ Ошибка при отправке приватного поста (приватный канал)")
-        return 1
-
-    print("\n" + "=" * 70)
-    print("✅ Скрипт завершил работу")
-    print("=" * 70 + "\n")
-    return 0
+    print(f"\n✅ subscriptions записан: {SUBSCRIPTIONS_PATH}")
+    print(f"✅ Всего конфигов: {total}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
